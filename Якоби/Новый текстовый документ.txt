@@ -1,0 +1,162 @@
+// Якоби.cpp: определяет точку входа для консольного приложения.
+//
+
+#include "stdafx.h"
+#include <stdio.h>
+#include <math.h>
+#include <omp.h>
+#include <malloc.h>
+
+#define N 256
+#define epsilon 0.001
+
+void copy_matrix(double **matrix_from, double **matrix_to, int size)
+{
+     int i, j;
+     for(i = 0; i < size; i++)
+		 for (j = 0; j < size; j++)
+			 matrix_to[i][j] = matrix_from[i][j];
+}
+
+void Jacoby(double **F, double **U, double **U_next, double **exact_U, double step, FILE *shodimost, int N1, int N2)
+{
+	int i, j;
+	int iteration = 1;
+	double nevyazka = epsilon + 1;
+	double delta;
+	for (iteration = 1; nevyazka > epsilon; iteration++)
+	{
+				nevyazka = 0.0;
+				for (i = N1; i <= N2; i++)
+					for (j = 1; j < N-1; j++)
+					{
+						delta = fabs(U[i][j] - exact_U[i][j]);
+						if (delta > nevyazka)
+							nevyazka = delta;
+
+						U_next[i][j] = 0.25 * (U[i-1][j] + U[i+1][j] + U[i][j-1] + U[i][j+1] - step*step*F[i][j]);
+					}
+				for(i = N1; i <= N2; i++)
+					for (j = 1; j < N-1; j++)
+						U[i][j] = U_next[i][j];
+				#pragma omp master
+				fprintf(shodimost, "%5i\t%8lf\n", iteration, nevyazka);
+	}
+}
+
+int main()
+{
+	int i, j;
+	double step = 1.0/(double)(N-1);
+	int sizeVector = N * sizeof(double);
+	int sizeMatrix = N * sizeof(double*);
+
+	// создание двумерной сетки
+	double *x = (double*) malloc(sizeVector);
+	double *y = (double*) malloc(sizeVector);
+
+	x[0] = 0;
+	y[0] = 0;
+
+	for (i = 1; i < N; i++)
+	{
+		x[i] = x[i-1] + step;
+		y[i] = y[i-1] + step;
+	}
+
+	// создание матриц U[N, N], U_next[N, N], F[N, N], exact_U[N, N] - точное решение
+	double **U = (double**) malloc(sizeMatrix);
+	double **F = (double**) malloc(sizeMatrix);
+	double **U_next = (double**) malloc(sizeMatrix);
+	double **exact_U = (double**) malloc(sizeMatrix);
+    for (i = 0; i < N; i++)
+	{
+        U[i] = (double*) malloc(sizeVector);
+		F[i] = (double*) malloc(sizeVector);
+		U_next[i] = (double*) malloc(sizeVector);
+		exact_U[i] = (double*) malloc(sizeVector);
+	}
+
+	for (i = 0; i < N; i++)
+		for (j = 0; j < N; j++)
+		{
+			U[i][j] = 0.0;
+			F[i][j] = 4 + 2 * y[j] * (y[j] - 1) + 2 * x[i] * (x[i] - 1);
+			exact_U[i][j] = (x[i]*x[i] - x[i] + 1) * (y[j]*y[j] - y[j] + 1);
+		}
+
+	// граничные условия
+		double h = step;
+	for (i = 0; i < N; i++)
+	{
+		U[0][i] = y[i]*y[i] - y[i] + 1;
+		U[N-1][i] = y[i]*y[i] - y[i] + 1;
+		U[i][0] = x[i]*x[i] - x[i] + 1;
+		U[i][N-1] = x[i]*x[i] - x[i] + 1;
+	}
+
+	copy_matrix(U, U_next, N);
+
+	// файл для записи данных о сходимости
+	FILE *shodimost = fopen("shodimost.txt", "w");
+	fprintf(shodimost, "No:\t\tNevyazka:\n---------------------\n");
+
+	//метод Якоби
+	
+	double t0 = omp_get_wtime();
+	int N1 = N/4;
+	int N2 = N/2;
+	int N3 = 0.75*N;
+	#pragma omp parallel num_threads(4)
+	{
+		#pragma omp sections
+		{
+			#pragma omp section
+			{
+				Jacoby(F,U,U_next,exact_U,step,shodimost, 1, N1);
+			}
+			#pragma omp section
+			{
+				Jacoby(F,U,U_next,exact_U,step,shodimost, N1, N2);
+			}
+			#pragma omp section
+			{
+				Jacoby(F,U,U_next,exact_U,step,shodimost, N2, N3);
+			}
+			#pragma omp section
+			{
+				Jacoby(F,U,U_next,exact_U,step,shodimost, N3, N-2);
+			}
+		}
+	}
+	double t1 = omp_get_wtime();
+
+	fclose(shodimost);
+
+	// запись результатов
+	FILE *out = fopen("out.dat", "w");
+	for (i = 0; i < N; i++)
+		for (j = 0; j < N; j++)
+			fprintf(out, "%lf\t%lf\t%lf\n", x[i], y[j], U[i][j]);
+	fclose(out);
+
+	// чистим массивы
+	free(x);
+	free(y);
+	for (i = 0; i < N; i++)
+	{
+		free(U[i]);
+		free(U_next[i]);
+		free(exact_U[i]);
+		free(F[i]);
+	}
+	free(U);
+	free(U_next);
+	free(exact_U);
+	free(F);
+
+	printf("\nWriting is finished!\nTime seconds %6.3lf \n", t1-t0);
+	getchar();
+	return 0;
+}
+
